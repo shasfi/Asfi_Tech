@@ -1,0 +1,43 @@
+name: Render Video (Step 2)
+
+# Manual trigger for now, on purpose — review the output before we wire up
+# auto-scheduling or auto-upload. Run it from the GitHub repo's "Actions" tab
+# any time: Actions -> Render Video (Step 2) -> "Run workflow".
+on:
+  workflow_dispatch: {}
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
+
+      - name: Install Python dependencies
+        run: pip install edge-tts requests
+
+      - name: Run render pipeline
+        env:
+          VERCEL_APP_URL: ${{ secrets.VERCEL_APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+        run: python scripts/render_video.py
+
+      - name: Upload video + thumbnail + metadata as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-video-${{ github.run_number }}
+          path: |
+            output/final_video.mp4
+            output/thumbnail.png
+            output/metadata.json
+          retention-days: 14
