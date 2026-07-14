@@ -1,0 +1,9 @@
+{
+  "name": "asfi-tech-yt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone YouTube automation project (separate from Asfi Blog) — trending topic pull, script + SEO/AEO/GEO metadata generation.",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}

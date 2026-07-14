@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/generate-video-script?secret=YOUR_SECRET_HERE",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/generate-video-script?secret=YOUR_SECRET_HERE",
+      "schedule": "0 14 * * *"
+    }
+  ]
+}
