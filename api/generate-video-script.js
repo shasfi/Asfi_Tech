@@ -64,7 +64,12 @@ export default async function handler(req, res) {
       if (!YOUTUBE_KEY) {
         return res.status(500).json({ error: "Missing YOUTUBE_API_KEY (needed for trending fetch — or pass ?topic= to skip it)" });
       }
-      const trendingUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=${regionCode}&maxResults=25&key=${YOUTUBE_KEY}`;
+      // videoCategoryId=28 = "Science & Technology" on YouTube. Without this filter,
+      // chart=mostPopular returns the SITE-WIDE trending chart (music, sports,
+      // entertainment, diss tracks, etc.) — completely unrelated to an AI/Tech channel.
+      // Allow override via ?category=<id> if you ever want a different niche.
+      const categoryId = (req.query.category_id || "28").trim();
+      const trendingUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=${regionCode}&videoCategoryId=${categoryId}&maxResults=25&key=${YOUTUBE_KEY}`;
       const trendingRes = await fetch(trendingUrl);
       const trendingData = await trendingRes.json();
       if (trendingData.error) {
@@ -76,6 +81,31 @@ export default async function handler(req, res) {
         category: v.snippet?.categoryId,
         views: v.statistics?.viewCount,
       }));
+
+      // Safety net: YouTube's mostPopular + videoCategoryId filter can occasionally
+      // still include off-topic items (movie trailers, music, etc. that got
+      // mis-tagged, or a sparse regional tech chart). Drop anything that doesn't
+      // actually look tech/AI-related before trusting the list.
+      const techPattern = /\b(ai|artificial intelligence|tech|technology|software|app|coding|programming|robot|chip|gadget|smartphone|iphone|android|computer|gpu|processor|startup|saas|cyber|data|cloud|automation)\b/i;
+      candidateTopics = candidateTopics.filter(
+        (t) => techPattern.test(t.title) || techPattern.test(t.description)
+      );
+
+      // Science & Technology trending is a much smaller list than the general chart
+      // and can occasionally come back empty for a region — fall back to a keyword
+      // search instead of failing outright.
+      if (!candidateTopics.length) {
+        const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=viewCount&publishedAfter=${new Date(Date.now() - 7 * 86400000).toISOString()}&q=${encodeURIComponent("AI|technology|tech news|AI tools")}&regionCode=${regionCode}&maxResults=25&key=${YOUTUBE_KEY}`;
+        const searchRes = await fetch(searchUrl);
+        const searchData = await searchRes.json();
+        candidateTopics = (searchData.items || [])
+          .map((v) => ({
+            title: v.snippet?.title || "",
+            description: (v.snippet?.description || "").slice(0, 200),
+            category: "28",
+          }))
+          .filter((t) => techPattern.test(t.title) || techPattern.test(t.description));
+      }
     }
 
     if (!candidateTopics.length) {
