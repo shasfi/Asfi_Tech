@@ -91,6 +91,16 @@ export default async function handler(req, res) {
         (t) => techPattern.test(t.title) || techPattern.test(t.description)
       );
 
+      // The channel is specifically AI-focused ("AI With Asfi"), not general tech —
+      // so prefer AI-specific topics over things like hardware repair guides when
+      // both are available. This is a stable sort, so within each group we keep
+      // YouTube's own trending order (mostPopular is already ranked by trending rank,
+      // so item 0 is more "trending" than item 10 — we don't want to lose that).
+      const aiPattern = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
+      candidateTopics = candidateTopics
+        .map((t, i) => ({ ...t, _rank: i, _isAI: aiPattern.test(t.title) || aiPattern.test(t.description) }))
+        .sort((a, b) => (b._isAI - a._isAI) || (a._rank - b._rank));
+
       // Science & Technology trending is a much smaller list than the general chart
       // and can occasionally come back empty for a region — fall back to a keyword
       // search instead of failing outright.
