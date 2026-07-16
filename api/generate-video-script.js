@@ -148,8 +148,39 @@ export default async function handler(req, res) {
       return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
     }
     const usedSet = new Set(usedTitles.map(normalize));
-    const fresh = candidateTopics.find((t) => !usedSet.has(normalize(t.title)));
-    const chosenTopic = fresh || candidateTopics[0]; // fall back rather than fail outright
+
+    // ---------------------------------------------------------------------
+    // Quality gate: even after the AI-priority sort, the top trending pick
+    // might be a thin viral clip (e.g. "Xbox Survives House Fire #shorts") —
+    // not AI-related and not enough substance for a 3.5-5 min explainer.
+    // If that happens, fall back automatically to a curated list of evergreen
+    // AI topics instead of asking you to manually supply one every time.
+    // ---------------------------------------------------------------------
+    const aiPattern2 = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
+    const isThin = (t) => (t.description || "").trim().length < 60;
+    const isHashtagSpam = (t) => (t.title.match(/#/g) || []).length >= 2;
+
+    let fresh = candidateTopics.find(
+      (t) => !usedSet.has(normalize(t.title)) && aiPattern2.test(t.title + " " + t.description) && !isThin(t) && !isHashtagSpam(t)
+    );
+
+    const CURATED_AI_TOPICS = [
+      { title: "How Large Language Models Actually Work", description: "An evergreen explainer on the mechanics behind models like ChatGPT and Claude — tokens, training, and inference, explained simply." },
+      { title: "5 AI Tools That Save You Hours Every Week", description: "A practical roundup of free/low-cost AI tools for productivity, writing, and research." },
+      { title: "ChatGPT vs Claude vs Gemini: Which AI Should You Actually Use", description: "A practical comparison of the major AI assistants — strengths, weaknesses, and which one fits which task." },
+      { title: "What Is a Neural Network, Really?", description: "A simple, visual explanation of how neural networks learn, for a non-technical audience." },
+      { title: "How AI Image Generators Turn Text Into Pictures", description: "An explainer on diffusion models and how tools like Midjourney and DALL-E work under the hood." },
+      { title: "The Biggest AI Myths People Still Believe", description: "Debunking common misconceptions about how AI models think, learn, and what they can and can't do." },
+      { title: "How to Write Better AI Prompts (Beginner Guide)", description: "A practical, example-driven guide to getting better results from ChatGPT, Claude, and other AI tools." },
+      { title: "AI Agents Explained: What They Are and Why Everyone's Talking About Them", description: "A clear breakdown of what an 'AI agent' actually means and how it differs from a regular chatbot." },
+    ];
+
+    if (!fresh) {
+      const freshCurated = CURATED_AI_TOPICS.find((t) => !usedSet.has(normalize(t.title)));
+      fresh = freshCurated || CURATED_AI_TOPICS[0]; // last resort: reuse is better than failing the whole run
+    }
+
+    const chosenTopic = fresh;
 
     // ---------------------------------------------------------------------
     // STEP 2: generate the faceless-explainer script + SEO/AEO/GEO metadata
