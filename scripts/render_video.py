@@ -31,6 +31,7 @@ import sys
 import textwrap
 import urllib.request
 import urllib.parse
+import urllib.error
 
 OUTPUT_DIR = "output"
 SCENES_DIR = os.path.join(OUTPUT_DIR, "scenes")
@@ -70,14 +71,24 @@ def get_audio_duration(path):
 
 
 def fetch_pexels_clip(query, out_path, min_duration=3):
-    """STEP 3: grab one free stock video clip matching the scene's visual_note."""
+    """STEP 3: grab one free stock video clip matching the scene's visual_note.
+    Returns None (not a crash) if Pexels errors out — the caller falls back
+    to a plain background so one bad API call doesn't kill the whole render."""
     api_key = os.environ["PEXELS_API_KEY"]
     url = "https://api.pexels.com/videos/search?" + urllib.parse.urlencode(
         {"query": query, "per_page": 5, "orientation": "landscape"}
     )
     req = urllib.request.Request(url, headers={"Authorization": api_key})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        log(f"  Pexels API error {e.code} for query '{query}': {body[:300]}")
+        return None
+    except Exception as e:
+        log(f"  Pexels request failed for query '{query}': {e}")
+        return None
 
     videos = data.get("videos", [])
     if not videos:
@@ -85,16 +96,20 @@ def fetch_pexels_clip(query, out_path, min_duration=3):
         return None
 
     # Prefer an HD-ish file, not the largest (keeps download + render fast)
-    for video in videos:
-        files = sorted(video.get("video_files", []), key=lambda f: f.get("width", 0))
-        for f in files:
-            if f.get("width", 0) >= 1280 and f.get("width", 0) <= 1920:
-                urllib.request.urlretrieve(f["link"], out_path)
-                return out_path
-    # fallback: just take the first file of the first result
-    first = videos[0]["video_files"][0]["link"]
-    urllib.request.urlretrieve(first, out_path)
-    return out_path
+    try:
+        for video in videos:
+            files = sorted(video.get("video_files", []), key=lambda f: f.get("width", 0))
+            for f in files:
+                if f.get("width", 0) >= 1280 and f.get("width", 0) <= 1920:
+                    urllib.request.urlretrieve(f["link"], out_path)
+                    return out_path
+        # fallback: just take the first file of the first result
+        first = videos[0]["video_files"][0]["link"]
+        urllib.request.urlretrieve(first, out_path)
+        return out_path
+    except Exception as e:
+        log(f"  Failed to download Pexels clip for '{query}': {e}")
+        return None
 
 
 def build_scene_clip(index, scene, scenes_dir):
