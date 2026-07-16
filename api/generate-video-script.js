@@ -161,7 +161,7 @@ export default async function handler(req, res) {
     const isHashtagSpam = (t) => (t.title.match(/#/g) || []).length >= 2;
 
     let fresh = candidateTopics.find(
-      (t) => !usedSet.has(normalize(t.title)) && aiPattern2.test(t.title + " " + t.description) && !isThin(t) && !isHashtagSpam(t)
+      (t) => !usedSet.has(normalize(t.title)) && aiPattern2.test(t.title) && !isThin(t) && !isHashtagSpam(t)
     );
 
     const CURATED_AI_TOPICS = [
