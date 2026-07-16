@@ -70,6 +70,17 @@ def get_audio_duration(path):
     return float(result.stdout.strip())
 
 
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+
+def download_file(url, out_path):
+    """Download a file with a normal browser User-Agent (avoids Cloudflare
+    treating the plain default urllib agent as a bot and blocking it)."""
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+    with urllib.request.urlopen(req, timeout=60) as resp, open(out_path, "wb") as f:
+        f.write(resp.read())
+
+
 def fetch_pexels_clip(query, out_path, min_duration=3):
     """STEP 3: grab one free stock video clip matching the scene's visual_note.
     Returns None (not a crash) if Pexels errors out — the caller falls back
@@ -78,7 +89,16 @@ def fetch_pexels_clip(query, out_path, min_duration=3):
     url = "https://api.pexels.com/videos/search?" + urllib.parse.urlencode(
         {"query": query, "per_page": 5, "orientation": "landscape"}
     )
-    req = urllib.request.Request(url, headers={"Authorization": api_key})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": api_key,
+            # Cloudflare sits in front of Pexels and blocks requests with no/odd
+            # User-Agent as bot traffic (this was the real cause of the earlier
+            # 403 "error code: 1010" — not an invalid API key).
+            "User-Agent": BROWSER_UA,
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -101,11 +121,11 @@ def fetch_pexels_clip(query, out_path, min_duration=3):
             files = sorted(video.get("video_files", []), key=lambda f: f.get("width", 0))
             for f in files:
                 if f.get("width", 0) >= 1280 and f.get("width", 0) <= 1920:
-                    urllib.request.urlretrieve(f["link"], out_path)
+                    download_file(f["link"], out_path)
                     return out_path
         # fallback: just take the first file of the first result
         first = videos[0]["video_files"][0]["link"]
-        urllib.request.urlretrieve(first, out_path)
+        download_file(first, out_path)
         return out_path
     except Exception as e:
         log(f"  Failed to download Pexels clip for '{query}': {e}")
@@ -237,3 +257,4 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"FAILED: {e}")
         sys.exit(1)
+      
