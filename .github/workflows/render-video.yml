@@ -1,15 +1,25 @@
-name: Render Video (Step 2)
+name: Render + Upload Video (Steps 2 + 3)
 
-# Manual trigger for now, on purpose — review the output before we wire up
-# auto-scheduling or auto-upload. Run it from the GitHub repo's "Actions" tab
-# any time: Actions -> Render Video (Step 2) -> "Run workflow".
+# Manual trigger. "privacy" input lets you do a couple of "unlisted" test
+# runs before switching to "public" once you're confident in the output —
+# only "public" counts toward YouTube Partner Program watch-hour requirements.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      privacy:
+        description: "YouTube privacy status for this upload"
+        required: true
+        default: "public"
+        type: choice
+        options:
+          - public
+          - unlisted
+          - private
 
 jobs:
   render:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -23,7 +33,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
 
       - name: Install Python dependencies
-        run: pip install edge-tts requests
+        run: pip install edge-tts requests google-auth google-auth-oauthlib google-api-python-client
 
       - name: Run render pipeline
         env:
@@ -32,7 +42,16 @@ jobs:
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: python scripts/render_video.py
 
-      - name: Upload video + thumbnail + metadata as artifact
+      - name: Upload to YouTube
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_PRIVACY_STATUS: ${{ github.event.inputs.privacy }}
+        run: python scripts/upload_youtube.py
+
+      - name: Upload artifacts (video + thumbnail + metadata + result)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rendered-video-${{ github.run_number }}
@@ -40,4 +59,6 @@ jobs:
             output/final_video.mp4
             output/thumbnail.png
             output/metadata.json
+            output/upload_result.json
           retention-days: 14
+          
