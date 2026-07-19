@@ -132,16 +132,53 @@ def fetch_pexels_clip(query, out_path, min_duration=3):
         return None
 
 
-def build_scene_clip(index, scene, scenes_dir):
-    """Build one finished scene: voiceover + matching clip + burned-in caption,
-    trimmed/looped to match the voiceover length exactly."""
+def fetch_pexels_photo(query, out_path):
+    """Alternative visual source: a free Pexels still photo (used for variety
+    alongside video clips, or as a fallback when no good video clip exists)."""
+    api_key = os.environ["PEXELS_API_KEY"]
+    url = "https://api.pexels.com/v1/search?" + urllib.parse.urlencode(
+        {"query": query, "per_page": 5, "orientation": "landscape"}
+    )
+    req = urllib.request.Request(url, headers={"Authorization": api_key, "User-Agent": BROWSER_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        log(f"  Pexels photo search failed for '{query}': {e}")
+        return None
+
+    photos = data.get("photos", [])
+    if not photos:
+        return None
+    try:
+        src = photos[0]["src"].get("large2x") or photos[0]["src"].get("original")
+        download_file(src, out_path)
+        return out_path
+    except Exception as e:
+        log(f"  Failed to download Pexels photo for '{query}': {e}")
+        return None
+
+
+def build_scene_clip(index, scene, scenes_dir, use_image=False):
+    """Build one finished scene: voiceover + matching visual (video clip OR
+    still image, alternated for variety) + burned-in caption, trimmed/looped
+    to match the voiceover length exactly."""
     audio_path = os.path.join(scenes_dir, f"scene_{index}.mp3")
     tts_scene(scene["voiceover"], audio_path)
     duration = get_audio_duration(audio_path)
     log(f"  scene {index}: voiceover {duration:.1f}s — '{scene['voiceover'][:50]}...'")
 
-    raw_clip = os.path.join(scenes_dir, f"scene_{index}_raw.mp4")
-    clip = fetch_pexels_clip(scene["visual_note"], raw_clip)
+    clip = None
+    photo = None
+    if use_image:
+        photo = fetch_pexels_photo(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_photo.jpg"))
+        if not photo:
+            # no matching photo — fall back to trying a video clip instead
+            clip = fetch_pexels_clip(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_raw.mp4"))
+    else:
+        clip = fetch_pexels_clip(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_raw.mp4"))
+        if not clip:
+            photo = fetch_pexels_photo(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_photo.jpg"))
 
     out_path = os.path.join(scenes_dir, f"scene_{index}_final.mp4")
     caption = scene.get("on_screen_text", "").replace(":", "\\:").replace("'", "\u2019")
@@ -161,6 +198,26 @@ def build_scene_clip(index, scene, scenes_dir):
         cmd = [
             "ffmpeg", "-y",
             "-stream_loop", "-1", "-i", clip,
+            "-i", audio_path,
+            "-vf", vf,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-t", str(duration),
+            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            out_path,
+        ]
+    elif photo:
+        # Still image with a slow "Ken Burns" zoom so it doesn't look like a
+        # static slide — much more watchable than a frozen photo for several
+        # seconds. zoompan needs a per-frame frame count matching duration*fps.
+        fps = 30
+        frames = max(1, int(duration * fps))
+        vf = (
+            f"scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,"
+            f"zoompan=z='min(zoom+0.0007,1.2)':d={frames}:s=1920x1080:fps={fps}{drawtext}"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-loop", "1", "-i", photo,
             "-i", audio_path,
             "-vf", vf,
             "-map", "0:v:0", "-map", "1:a:0",
@@ -226,7 +283,10 @@ def main():
     scenes = data["script"]
     scene_paths = []
     for i, scene in enumerate(scenes, start=1):
-        scene_paths.append(build_scene_clip(i, scene, SCENES_DIR))
+        # Alternate video clip / still image scene-by-scene for visual variety
+        # across a shorter scene count (odd scenes = video, even = image).
+        use_image = (i % 2 == 0)
+        scene_paths.append(build_scene_clip(i, scene, SCENES_DIR, use_image=use_image))
 
     final_video = os.path.join(OUTPUT_DIR, "final_video.mp4")
     log("Concatenating all scenes into final video...")
@@ -257,4 +317,4 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"FAILED: {e}")
         sys.exit(1)
-      
+        

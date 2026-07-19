@@ -217,8 +217,13 @@ STRICT RULES:
 - QUALITY FLOOR (non-negotiable): every fact must be accurate and traceable to the given topic/
   context. No filler sentences. No two scenes repeating the same point in different words. If a
   scene doesn't add new information, cut it rather than padding runtime.
-- "script": 6-10 scenes, ~500-750 words of voiceover TOTAL (roughly 3.5-5 minutes spoken).
-  Each scene's voiceover is 2-4 sentences, written for natural TEXT-TO-SPEECH delivery: no
+- "script": 5-6 scenes by default (never fewer than 5). Only go up to 7-8 scenes
+  if the topic genuinely needs that many distinct visual beats (each scene will
+  use either a video clip OR a still image as its visual, so more scenes means
+  more variety, not padding) — 5-6 is the target, 7-8 is the exception, not the norm.
+  ~500-750 words of voiceover TOTAL across however many scenes (roughly 3.5-5
+  minutes spoken).
+  Each scene's voiceover is 3-6 sentences, written for natural TEXT-TO-SPEECH delivery: no
   stage directions inside the voiceover text itself, no emoji, plain spoken sentences.
 - "visual_note": a short concrete instruction for what stock footage/B-roll to show
   (e.g. "wide shot of a stock exchange floor, fast cuts of tickers"), not vague ("something related").
