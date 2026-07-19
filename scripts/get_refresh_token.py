@@ -35,12 +35,21 @@ SETUP BEFORE RUNNING:
 """
 
 from google_auth_oauthlib.flow import InstalledAppFlow
+import os
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
-CLIENT_SECRETS_FILE = "client_secret.json"
+# Resolve relative to this script's own folder (scripts/), not whatever
+# directory you happen to run the command from — avoids "file not found"
+# confusion depending on where you type `python scripts/get_refresh_token.py`.
+CLIENT_SECRETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client_secret.json")
 
 
 def main():
+    if not os.path.exists(CLIENT_SECRETS_FILE):
+        print(f"ERROR: could not find {CLIENT_SECRETS_FILE}")
+        print("Make sure the downloaded OAuth JSON file is renamed to exactly")
+        print("'client_secret.json' and placed in the SAME 'scripts/' folder as this script.")
+        return
     flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRETS_FILE, SCOPES)
     creds = flow.run_local_server(port=0)
 

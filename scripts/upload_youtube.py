@@ -97,10 +97,18 @@ def main():
     log(f"Uploaded. Video ID: {video_id}")
     log(f"URL: https://www.youtube.com/watch?v={video_id}")
 
-    # Set the custom thumbnail
+    # Set the custom thumbnail — wrapped in try/except because this call
+    # requires a phone-verified YouTube channel. If the channel isn't
+    # verified yet, this fails with a 403 even though the video upload
+    # itself succeeded — we don't want that to mark the whole run as
+    # failed when the video is already live.
     if os.path.exists(thumb_path):
-        youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(thumb_path)).execute()
-        log("Thumbnail set.")
+        try:
+            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(thumb_path)).execute()
+            log("Thumbnail set.")
+        except Exception as e:
+            log(f"Could not set custom thumbnail (video still uploaded fine): {e}")
+            log("This usually means the channel isn't phone-verified yet — verify at https://www.youtube.com/verify")
 
     # Write the video_id + url out so the workflow can surface it in the
     # Actions run summary / artifact for easy reference.
