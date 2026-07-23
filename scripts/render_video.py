@@ -206,25 +206,70 @@ def build_scene_clip(index, scene, scenes_dir, use_image=False):
             out_path,
         ]
     elif photo:
-        # Still image with a slow "Ken Burns" zoom so it doesn't look like a
-        # static slide — much more watchable than a frozen photo for several
-        # seconds. zoompan needs a per-frame frame count matching duration*fps.
+        # Still image with Ken Burns zoom, capped at 4-5 seconds max — play once,
+        # no repeat. If voiceover is longer, append a video or background fallback.
+        photo_duration = min(4.5, duration)  # 4-5 second cap
+        remaining_duration = max(0, duration - photo_duration)
+        
         fps = 30
-        frames = max(1, int(duration * fps))
+        frames = max(1, int(photo_duration * fps))
         vf = (
             f"scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,"
             f"zoompan=z='min(zoom+0.0007,1.2)':d={frames}:s=1920x1080:fps={fps}{drawtext}"
         )
+        # Loop=1 means show once, no repeat (this is the final render for this duration)
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", photo,
-            "-i", audio_path,
+            "-f", "lavfi", "-i", f"aevalsrc=0:d={photo_duration}",  # silent audio for photo duration
             "-vf", vf,
             "-map", "0:v:0", "-map", "1:a:0",
-            "-t", str(duration),
-            "-c:v", "libx264", "-c:a", "aac", "-shortest",
+            "-t", str(photo_duration),
+            "-c:v", "libx264", "-c:a", "aac",
             out_path,
         ]
+        subprocess.run(cmd, check=True)
+        
+        # If voiceover is longer than the photo duration, append a video/background
+        # for the remainder (play once, not looped).
+        if remaining_duration > 0.1:
+            log(f"  photo: 4.5s, appending fallback for {remaining_duration:.1f}s")
+            fallback_clip = fetch_pexels_clip(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_fb.mp4"))
+            if fallback_clip:
+                # Trim the fallback video to exactly remaining_duration (don't loop)
+                vf2 = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080{drawtext}"
+                cmd2 = [
+                    "ffmpeg", "-y", "-i", fallback_clip,
+                    "-vf", vf2,
+                    "-t", str(remaining_duration),  # play once, stop at remaining_duration
+                    "-c:v", "libx264", "-c:a", "aac", "-shortest",
+                    os.path.join(scenes_dir, f"scene_{index}_fb_final.mp4"),
+                ]
+                subprocess.run(cmd2, check=True)
+                return concatenate_two_videos(
+                    out_path,
+                    os.path.join(scenes_dir, f"scene_{index}_fb_final.mp4"),
+                    os.path.join(scenes_dir, f"scene_{index}_both.mp4"),
+                )
+            else:
+                # No fallback video — use plain background (play once)
+                vf3 = f"color=c=0x0b1a33:s=1920x1080{drawtext}"
+                cmd3 = [
+                    "ffmpeg", "-y",
+                    "-f", "lavfi", "-i", f"{vf3}:d={remaining_duration}",
+                    "-f", "lavfi", "-i", f"aevalsrc=0:d={remaining_duration}",
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-c:v", "libx264", "-c:a", "aac",
+                    os.path.join(scenes_dir, f"scene_{index}_bg.mp4"),
+                ]
+                subprocess.run(cmd3, check=True)
+                return concatenate_two_videos(
+                    out_path,
+                    os.path.join(scenes_dir, f"scene_{index}_bg.mp4"),
+                    os.path.join(scenes_dir, f"scene_{index}_both.mp4"),
+                )
+        
+        return out_path
     else:
         # No stock footage found — fall back to a plain dark-blue background
         # (still on-brand with the channel's blue/purple theme) instead of failing.
@@ -239,6 +284,20 @@ def build_scene_clip(index, scene, scenes_dir, use_image=False):
         ]
     subprocess.run(cmd, check=True)
     return out_path
+
+
+def concatenate_two_videos(video1, video2, output):
+    """Join two video files without re-encoding."""
+    list_path = output.replace(".mp4", "_list.txt")
+    with open(list_path, "w") as f:
+        f.write(f"file '{os.path.abspath(video1)}'\n")
+        f.write(f"file '{os.path.abspath(video2)}'\n")
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+        "-c:v", "copy", "-c:a", "aac", output,
+    ]
+    subprocess.run(cmd, check=True)
+    return output
 
 
 def concatenate_scenes(scene_paths, final_path):
@@ -317,4 +376,3 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"FAILED: {e}")
         sys.exit(1)
-        
