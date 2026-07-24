@@ -330,11 +330,15 @@ STRICT RULES:
     }
 
     // ---------------------------------------------------------------------
-    // Record this topic as used, so future runs don't repeat it.
+    // Record this topic as used, so future runs don't repeat it. Previously
+    // this write was never checked for success — if it silently failed
+    // (stale sha, e.g. from overlapping runs triggered close together), the
+    // topic never actually got recorded as used, so the same curated topic
+    // kept getting picked run after run. Now: check success, retry once with
+    // a freshly-fetched sha if it failed, matching the blog's posts-data.js fix.
     // ---------------------------------------------------------------------
-    if (historyApi && GITHUB_TOKEN) {
-      const updated = [chosenTopic.title, ...usedTitles].slice(0, 500); // cap history size
-      await fetch(historyApi, {
+    async function putHistory(list, shaToUse) {
+      return fetch(historyApi, {
         method: "PUT",
         headers: {
           Authorization: `Bearer ${GITHUB_TOKEN}`,
@@ -342,10 +346,35 @@ STRICT RULES:
         },
         body: JSON.stringify({
           message: `Record used video topic: ${chosenTopic.title}`,
-          content: Buffer.from(JSON.stringify(updated, null, 2)).toString("base64"),
-          sha: historyFile ? historyFile.sha : undefined,
+          content: Buffer.from(JSON.stringify(list, null, 2)).toString("base64"),
+          sha: shaToUse,
         }),
       });
+    }
+
+    if (historyApi && GITHUB_TOKEN) {
+      const updated = [chosenTopic.title, ...usedTitles].slice(0, 500); // cap history size
+      let putRes = await putHistory(updated, historyFile ? historyFile.sha : undefined);
+
+      if (!putRes.ok) {
+        // Likely a stale/missing sha — re-fetch current content and retry once.
+        const retryGet = await fetch(historyApi, { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } });
+        if (retryGet.ok) {
+          const retryFile = await retryGet.json();
+          let freshList = [];
+          try {
+            freshList = JSON.parse(Buffer.from(retryFile.content, "base64").toString("utf-8"));
+          } catch (e) {
+            freshList = [];
+          }
+          const mergedUpdate = [chosenTopic.title, ...freshList].slice(0, 500);
+          putRes = await putHistory(mergedUpdate, retryFile.sha);
+        }
+      }
+
+      if (!putRes.ok) {
+        console.error("Failed to record topic history after retry:", await putRes.text());
+      }
     }
 
     return res.status(200).json({
