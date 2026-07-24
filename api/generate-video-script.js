@@ -101,20 +101,31 @@ export default async function handler(req, res) {
         .map((t, i) => ({ ...t, _rank: i, _isAI: aiPattern.test(t.title) || aiPattern.test(t.description) }))
         .sort((a, b) => (b._isAI - a._isAI) || (a._rank - b._rank));
 
-      // Science & Technology trending is a much smaller list than the general chart
-      // and can occasionally come back empty for a region — fall back to a keyword
-      // search instead of failing outright.
-      if (!candidateTopics.length) {
-        const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=viewCount&publishedAfter=${new Date(Date.now() - 7 * 86400000).toISOString()}&q=${encodeURIComponent("AI|technology|tech news|AI tools")}&regionCode=${regionCode}&maxResults=25&key=${YOUTUBE_KEY}`;
-        const searchRes = await fetch(searchUrl);
-        const searchData = await searchRes.json();
-        candidateTopics = (searchData.items || [])
-          .map((v) => ({
-            title: v.snippet?.title || "",
-            description: (v.snippet?.description || "").slice(0, 200),
-            category: "28",
-          }))
-          .filter((t) => techPattern.test(t.title) || techPattern.test(t.description));
+      // The Science & Technology "mostPopular" chart is small (often 15-25
+      // videos) and barely changes hour-to-hour, so after repeated runs most
+      // of it ends up in the "used" history — leaving nothing "fresh" and
+      // falling to the curated list far more often than it should. Always
+      // supplement with a keyword search for recent AI/tech news (last 48h),
+      // not just when the trending chart is completely empty, to keep the
+      // candidate pool large enough that real trending topics keep surfacing.
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=relevance&publishedAfter=${new Date(Date.now() - 2 * 86400000).toISOString()}&q=${encodeURIComponent("AI news OR AI tools OR tech news OR new gadget")}&regionCode=${regionCode}&maxResults=25&key=${YOUTUBE_KEY}`;
+      const searchRes = await fetch(searchUrl);
+      const searchData = await searchRes.json();
+      const searchTopics = (searchData.items || [])
+        .map((v) => ({
+          title: v.snippet?.title || "",
+          description: (v.snippet?.description || "").slice(0, 200),
+          category: "28",
+        }))
+        .filter((t) => techPattern.test(t.title) || techPattern.test(t.description));
+
+      // Merge, de-duping by normalized title so the same video isn't counted twice.
+      const seenTitles = new Set(candidateTopics.map((t) => t.title.toLowerCase().trim()));
+      for (const t of searchTopics) {
+        if (!seenTitles.has(t.title.toLowerCase().trim())) {
+          candidateTopics.push(t);
+          seenTitles.add(t.title.toLowerCase().trim());
+        }
       }
     }
 
