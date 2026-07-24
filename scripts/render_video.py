@@ -208,20 +208,20 @@ def build_scene_clip(index, scene, scenes_dir, use_image=False):
     elif photo:
         # Still image with Ken Burns zoom, capped at 4-5 seconds max — play once,
         # no repeat. If voiceover is longer, append a video or background fallback.
-        photo_duration = min(4.5, duration)  # 4-5 second cap
+        photo_duration = min(4.5, duration)
         remaining_duration = max(0, duration - photo_duration)
-        
+
         fps = 30
         frames = max(1, int(photo_duration * fps))
         vf = (
             f"scale=3840:2160:force_original_aspect_ratio=increase,crop=3840:2160,"
             f"zoompan=z='min(zoom+0.0007,1.2)':d={frames}:s=1920x1080:fps={fps}{drawtext}"
         )
-        # Loop=1 means show once, no repeat (this is the final render for this duration)
+        # Use the FIRST photo_duration seconds of the real voiceover (not silence).
         cmd = [
             "ffmpeg", "-y",
             "-loop", "1", "-i", photo,
-            "-f", "lavfi", "-i", f"aevalsrc=0:d={photo_duration}",  # silent audio for photo duration
+            "-i", audio_path,
             "-vf", vf,
             "-map", "0:v:0", "-map", "1:a:0",
             "-t", str(photo_duration),
@@ -229,46 +229,45 @@ def build_scene_clip(index, scene, scenes_dir, use_image=False):
             out_path,
         ]
         subprocess.run(cmd, check=True)
-        
-        # If voiceover is longer than the photo duration, append a video/background
-        # for the remainder (play once, not looped).
+
         if remaining_duration > 0.1:
-            log(f"  photo: 4.5s, appending fallback for {remaining_duration:.1f}s")
+            log(f"  photo: {photo_duration:.1f}s, appending fallback for remaining {remaining_duration:.1f}s")
             fallback_clip = fetch_pexels_clip(scene["visual_note"], os.path.join(scenes_dir, f"scene_{index}_fb.mp4"))
+            fallback_final = os.path.join(scenes_dir, f"scene_{index}_fb_final.mp4")
+
             if fallback_clip:
-                # Trim the fallback video to exactly remaining_duration (don't loop)
                 vf2 = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080{drawtext}"
+                # -ss on the AUDIO input seeks into the real voiceover to grab
+                # exactly the remaining_duration seconds that weren't used yet
+                # (the part after photo_duration) — this is the fix: the
+                # fallback segment now carries the rest of the actual voiceover,
+                # not the stock clip's own background sound or silence.
                 cmd2 = [
-                    "ffmpeg", "-y", "-i", fallback_clip,
+                    "ffmpeg", "-y",
+                    "-i", fallback_clip,
+                    "-ss", str(photo_duration), "-i", audio_path,
                     "-vf", vf2,
-                    "-t", str(remaining_duration),  # play once, stop at remaining_duration
+                    "-map", "0:v:0", "-map", "1:a:0",
+                    "-t", str(remaining_duration),
                     "-c:v", "libx264", "-c:a", "aac", "-shortest",
-                    os.path.join(scenes_dir, f"scene_{index}_fb_final.mp4"),
+                    fallback_final,
                 ]
                 subprocess.run(cmd2, check=True)
-                return concatenate_two_videos(
-                    out_path,
-                    os.path.join(scenes_dir, f"scene_{index}_fb_final.mp4"),
-                    os.path.join(scenes_dir, f"scene_{index}_both.mp4"),
-                )
             else:
-                # No fallback video — use plain background (play once)
                 vf3 = f"color=c=0x0b1a33:s=1920x1080{drawtext}"
                 cmd3 = [
                     "ffmpeg", "-y",
                     "-f", "lavfi", "-i", f"{vf3}:d={remaining_duration}",
-                    "-f", "lavfi", "-i", f"aevalsrc=0:d={remaining_duration}",
+                    "-ss", str(photo_duration), "-i", audio_path,
                     "-map", "0:v:0", "-map", "1:a:0",
+                    "-t", str(remaining_duration),
                     "-c:v", "libx264", "-c:a", "aac",
-                    os.path.join(scenes_dir, f"scene_{index}_bg.mp4"),
+                    fallback_final,
                 ]
                 subprocess.run(cmd3, check=True)
-                return concatenate_two_videos(
-                    out_path,
-                    os.path.join(scenes_dir, f"scene_{index}_bg.mp4"),
-                    os.path.join(scenes_dir, f"scene_{index}_both.mp4"),
-                )
-        
+
+            return concatenate_two_videos(out_path, fallback_final, os.path.join(scenes_dir, f"scene_{index}_both.mp4"))
+
         return out_path
     else:
         # No stock footage found — fall back to a plain dark-blue background
@@ -376,3 +375,4 @@ if __name__ == "__main__":
     except Exception as e:
         log(f"FAILED: {e}")
         sys.exit(1)
+      
