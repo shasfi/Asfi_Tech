@@ -150,19 +150,26 @@ export default async function handler(req, res) {
     const usedSet = new Set(usedTitles.map(normalize));
 
     // ---------------------------------------------------------------------
-    // Quality gate: even after the AI-priority sort, the top trending pick
-    // might be a thin viral clip (e.g. "Xbox Survives House Fire #shorts") —
-    // not AI-related and not enough substance for a 3.5-5 min explainer.
-    // If that happens, fall back automatically to a curated list of evergreen
-    // AI topics instead of asking you to manually supply one every time.
+    // Quality gate + TIERED selection. Previously this only accepted trending
+    // items with "AI" literally in the title, which was too strict — real
+    // trending Sci&Tech topics (new phones, apps, gadgets) rarely say "AI" in
+    // the title even when relevant to a tech channel, so almost everything
+    // fell through to the small curated list, causing repetitive LLM-heavy
+    // topics. Now we try three tiers, in order, before giving up to curated:
+    //   Tier 1: trending + AI-specific title (best — real trending AI news)
+    //   Tier 2: trending + general tech title (still genuinely trending, just
+    //           not AI-specific — phones, apps, gadgets, software launches)
+    //   Tier 3: curated evergreen AI topics (only if trending has nothing usable)
     // ---------------------------------------------------------------------
     const aiPattern2 = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
+    const techPattern2 = /\b(ai|tech|technology|software|app|coding|programming|robot|chip|gadget|smartphone|iphone|android|computer|gpu|processor|startup|saas|cyber|data|cloud|automation|update|feature|review|launch)\b/i;
     const isThin = (t) => (t.description || "").trim().length < 60;
     const isHashtagSpam = (t) => (t.title.match(/#/g) || []).length >= 2;
+    const isUsable = (t) => !usedSet.has(normalize(t.title)) && !isThin(t) && !isHashtagSpam(t);
 
-    let fresh = candidateTopics.find(
-      (t) => !usedSet.has(normalize(t.title)) && aiPattern2.test(t.title) && !isThin(t) && !isHashtagSpam(t)
-    );
+    let fresh =
+      candidateTopics.find((t) => isUsable(t) && aiPattern2.test(t.title)) ||
+      candidateTopics.find((t) => isUsable(t) && techPattern2.test(t.title));
 
     const CURATED_AI_TOPICS = [
       { title: "How Large Language Models Actually Work", description: "An evergreen explainer on the mechanics behind models like ChatGPT and Claude — tokens, training, and inference, explained simply." },
@@ -173,6 +180,18 @@ export default async function handler(req, res) {
       { title: "The Biggest AI Myths People Still Believe", description: "Debunking common misconceptions about how AI models think, learn, and what they can and can't do." },
       { title: "How to Write Better AI Prompts (Beginner Guide)", description: "A practical, example-driven guide to getting better results from ChatGPT, Claude, and other AI tools." },
       { title: "AI Agents Explained: What They Are and Why Everyone's Talking About Them", description: "A clear breakdown of what an 'AI agent' actually means and how it differs from a regular chatbot." },
+      { title: "How Does Face Recognition Actually Work?", description: "An explainer on the computer vision techniques behind face ID and photo tagging." },
+      { title: "Why Every Big Tech Company Is Racing to Build AI Chips", description: "A look at why GPUs and custom AI chips became the most valuable hardware in tech." },
+      { title: "What Is Edge AI and Why Does It Matter?", description: "An explainer on running AI models directly on phones and devices instead of the cloud." },
+      { title: "How AI Voice Cloning Actually Works", description: "A breakdown of the technology behind realistic AI voice generation and its risks." },
+      { title: "The Difference Between Machine Learning and Deep Learning", description: "A simple explainer clarifying two terms people often use interchangeably but mean different things." },
+      { title: "How Self-Driving Cars 'See' the Road", description: "An explainer on the sensors and AI models that let autonomous vehicles navigate." },
+      { title: "What Is a GPU and Why Does AI Need So Many?", description: "A beginner-friendly explainer on why graphics chips became essential for AI training." },
+      { title: "How Recommendation Algorithms Actually Decide What You See", description: "An explainer on how platforms like YouTube and Netflix use AI to personalize your feed." },
+      { title: "Are AI Detectors Actually Accurate?", description: "A factual look at how AI-content detection tools work and their real-world reliability." },
+      { title: "How Much Energy Does Training an AI Model Actually Use?", description: "A factual breakdown of the real computing and energy cost behind large AI models." },
+      { title: "What Is Prompt Injection and Why Should You Care?", description: "An explainer on a real security risk in AI systems, in plain language." },
+      { title: "How AI Is Changing Software Development", description: "A look at how AI coding assistants are changing what it means to be a programmer." },
     ];
 
     if (!fresh) {
@@ -228,19 +247,37 @@ STRICT RULES:
 - "visual_note": a short concrete instruction for what stock footage/B-roll to show
   (e.g. "wide shot of a stock exchange floor, fast cuts of tickers"), not vague ("something related").
 - "on_screen_text": short punchy on-screen caption/keyword for that scene (3-6 words), or "" if none needed.
-- "hook_line": the FIRST 3 seconds of spoken script — must create curiosity/stakes immediately,
-  no throat-clearing ("Hey guys, welcome back").
+- "video_title": under 70 characters (YouTube truncates longer titles in search/suggested results).
+  Put the PRIMARY keyword as close to the FRONT of the title as possible (YouTube's search and
+  "AIO" — its AI-driven recommendation system that decides what to surface for a query — both
+  weight early keyword placement heavily). No clickbait ALL CAPS spam, no misleading claims —
+  YouTube actively suppresses reach on titles that don't match the actual video content.
+- "description": 200-350 words (longer, keyword-rich descriptions rank better on YouTube than short
+  ones). Structure it for FOUR things at once:
+    (1) SEO — the first 2-3 sentences (the part visible before "Show more") must naturally include
+        the primary keyword AND 1-2 close variants, since this snippet is what YouTube search and
+        Google search both index most heavily.
+    (2) AIO (YouTube's own AI ranking/recommendation system) — write naturally but keyword-dense
+        throughout, not just the opening; YouTube's system matches full description content against
+        both the video's actual spoken transcript and search queries, so keyword variety beyond the
+        title genuinely helps discovery.
+    (3) AEO — include a clearly-labeled "Key facts:" bullet list of 3-5 concrete, citable facts,
+        written so an answer engine (ChatGPT, Perplexity, Google AI Overview) could quote them directly.
+    (4) GEO — write in a factual, structured, third-person tone (not hype/marketing language) so
+        generative engines treat this as a reliable source to cite.
+  End the description with: the chapters list inline as plain text lines ("0:00 Intro" etc), then
+  3-5 relevant hashtags on their own line (e.g. "#AI #MachineLearning #TechExplained") — YouTube
+  surfaces the first 3 hashtags above the title itself, which is free extra discoverability.
+- "tags": 12-15 tags (use the full allowance — more relevant tags genuinely help YouTube's
+  matching system), ordered from most to least important: 2-3 broad single/two-word tags first
+  (the biggest search volume), then long-tail 3-5 word tags, then close variants/misspellings
+  people actually search. No hashtags here (tags field is separate from description hashtags),
+  no duplicates, no irrelevant tags just for reach — mismatched tags hurt watch-time signals.
+- "hook_line": the FIRST 3 seconds of spoken script — this is the single highest-leverage line
+  for YouTube's algorithm, since audience-retention in the first few seconds is a major ranking
+  signal. Must create curiosity/stakes immediately, no throat-clearing ("Hey guys, welcome back").
 - "cta_line": natural subscribe/engagement prompt, not generic ("like and subscribe" alone is banned —
   tie it to the topic, e.g. "Subscribe if you want the next update on this before it breaks anywhere else").
-- "video_title": under 70 characters, includes the primary keyword naturally, no clickbait ALL CAPS spam.
-- "description": 150-300 words. Structure it for THREE audiences at once:
-    (1) SEO — first 2 sentences must contain the main keyword naturally, for YouTube/Google search.
-    (2) AEO — include a clearly-labeled "Key facts:" bullet list of 3-5 concrete, citable facts,
-        written so an answer engine (ChatGPT, Perplexity, Google AI Overview) could quote them directly.
-    (3) GEO — write in a factual, structured, third-person tone (not hype/marketing language) so
-        generative engines treat this as a reliable source to cite.
-  End the description with the chapters list inline as plain text lines "0:00 Intro" etc.
-- "tags": 8-15 tags, mix of broad (1-2 word) and long-tail (3-5 word) search terms, no hashtags, no duplicates.
 - "chapters": timestamps must be strictly increasing starting at 0:00, one per major script beat,
   spacing estimated from voiceover length (roughly 150 spoken words per minute).
 - "aeo_qa_block": exactly 3-5 question/answer pairs a viewer might ask an AI assistant about this
