@@ -1,9 +1,16 @@
 name: Render + Upload Video (Steps 2 + 3)
 
-# Manual trigger. "privacy" input lets you do a couple of "unlisted" test
-# runs before switching to "public" once you're confident in the output —
-# only "public" counts toward YouTube Partner Program watch-hour requirements.
+# Runs automatically twice a day, every day — timed for the US tech-audience
+# peak windows (converted to UTC): 12:00 UTC = 8 AM US Eastern (morning
+# routine browsing) and 16:00 UTC = 12 PM US Eastern (lunch break, the
+# strongest engagement window). In Pakistan time (PKT) that's 5 PM and 9 PM.
+#
+# You can still trigger it manually any time from the Actions tab too —
+# useful for a one-off unlisted test run before trusting the schedule.
 on:
+  schedule:
+    - cron: "0 12 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
     inputs:
       privacy:
@@ -47,7 +54,9 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          YT_PRIVACY_STATUS: ${{ github.event.inputs.privacy }}
+          # Scheduled (cron) runs have no "inputs" — default to "public" for
+          # those. Manual runs still let you pick unlisted/private for testing.
+          YT_PRIVACY_STATUS: ${{ github.event.inputs.privacy || 'public' }}
         run: python scripts/upload_youtube.py
 
       - name: Upload artifacts (video + thumbnail + metadata + result)
@@ -61,4 +70,3 @@ jobs:
             output/metadata.json
             output/upload_result.json
           retention-days: 14
-          
