@@ -158,8 +158,12 @@ def fetch_pexels_photo(query, out_path, exclude_urls=None):
 def make_video_segment(clip_path, audio_path, audio_offset, seg_duration, drawtext, out_path):
     """One segment: a video clip trimmed to seg_duration (played once, never
     looped), paired with the correct slice of the REAL voiceover starting at
-    audio_offset — this is what keeps the voice continuous across segments."""
-    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080{drawtext}"
+    audio_offset — this is what keeps the voice continuous across segments.
+    Forces a UNIFORM output format (30fps, 44100Hz stereo audio) across every
+    segment type — without this, segments with mismatched frame rates/audio
+    params cause the concat step to desync or silently drop audio partway
+    through, which is why the voice was cutting out mid-video."""
+    vf = f"scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080,fps=30{drawtext}"
     cmd = [
         "ffmpeg", "-y",
         "-i", clip_path,
@@ -167,7 +171,9 @@ def make_video_segment(clip_path, audio_path, audio_offset, seg_duration, drawte
         "-vf", vf,
         "-map", "0:v:0", "-map", "1:a:0",
         "-t", str(seg_duration),
-        "-c:v", "libx264", "-c:a", "aac", "-shortest",
+        "-c:v", "libx264", "-r", "30",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        "-shortest",
         out_path,
     ]
     subprocess.run(cmd, check=True)
@@ -176,7 +182,8 @@ def make_video_segment(clip_path, audio_path, audio_offset, seg_duration, drawte
 def make_photo_segment(photo_path, audio_path, audio_offset, seg_duration, drawtext, out_path):
     """One segment: a still image with a slow Ken Burns zoom, shown for
     exactly seg_duration (never looped/repeated), paired with the correct
-    slice of the real voiceover."""
+    slice of the real voiceover. Same uniform 30fps/44100Hz format as
+    make_video_segment so concatenation doesn't desync audio."""
     fps = 30
     frames = max(1, int(seg_duration * fps))
     vf = (
@@ -190,7 +197,8 @@ def make_photo_segment(photo_path, audio_path, audio_offset, seg_duration, drawt
         "-vf", vf,
         "-map", "0:v:0", "-map", "1:a:0",
         "-t", str(seg_duration),
-        "-c:v", "libx264", "-c:a", "aac",
+        "-c:v", "libx264", "-r", "30",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2",
         out_path,
     ]
     subprocess.run(cmd, check=True)
@@ -198,15 +206,17 @@ def make_photo_segment(photo_path, audio_path, audio_offset, seg_duration, drawt
 
 def make_background_segment(audio_path, audio_offset, seg_duration, drawtext, out_path):
     """Last-resort segment when no clip/photo is available: plain on-brand
-    background color, still paired with the correct real voiceover slice."""
-    vf = f"color=c=0x0b1a33:s=1920x1080{drawtext}"
+    background color, still paired with the correct real voiceover slice.
+    Same uniform 30fps/44100Hz format as the other segment types."""
+    vf = f"color=c=0x0b1a33:s=1920x1080:r=30{drawtext}"
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", f"{vf}:d={seg_duration}",
         "-ss", str(audio_offset), "-i", audio_path,
         "-map", "0:v:0", "-map", "1:a:0",
         "-t", str(seg_duration),
-        "-c:v", "libx264", "-c:a", "aac",
+        "-c:v", "libx264", "-r", "30",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2",
         out_path,
     ]
     subprocess.run(cmd, check=True)
@@ -301,14 +311,18 @@ def build_scene_clip(index, scene, scenes_dir):
 
 
 def concatenate_videos(video_paths, output):
-    """Join any number of video files without re-encoding."""
+    """Join any number of video files without re-encoding mismatches — all
+    inputs already share the same 30fps/44100Hz format from the segment
+    builders above, and we re-assert it here too as a final safety net."""
     list_path = output.replace(".mp4", "_list.txt")
     with open(list_path, "w") as f:
         for p in video_paths:
             f.write(f"file '{os.path.abspath(p)}'\n")
     cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_path,
-        "-c:v", "libx264", "-c:a", "aac", output,
+        "-c:v", "libx264", "-r", "30",
+        "-c:a", "aac", "-ar", "44100", "-ac", "2",
+        output,
     ]
     subprocess.run(cmd, check=True)
     return output
