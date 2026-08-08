@@ -1,309 +1,432 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AI With Asfi — Automated AI &amp; Tech Video Pipeline</title>
-<meta name="description" content="An automated pipeline that turns real YouTube trending data into faceless AI &amp; tech explainer videos — script, voice, visuals, and publishing, end to end." />
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #0A0E1F;
-    --bg-soft: #0F1430;
-    --line: rgba(148, 163, 210, 0.14);
-    --text: #EDEFF7;
-    --text-soft: #9AA3C2;
-    --blue: #5B7FFF;
-    --violet: #A054F5;
-    --cyan: #57E8D6;
-    --mono: 'JetBrains Mono', monospace;
-    --display: 'Space Grotesk', sans-serif;
-    --body: 'Inter', sans-serif;
+// api/generate-video-script.js
+// STANDALONE PROJECT — separate from the Asfi Blog repo/Vercel project on purpose.
+// Vercel Serverless Function
+// URL after deploy: https://YOUR-YT-PROJECT.vercel.app/api/generate-video-script?secret=YOUR_SECRET
+//
+// STEP 1 of the YouTube automation pipeline (free stack):
+// 1. Fetch REAL trending videos from YouTube Data API v3 (mostPopular chart, free quota)
+// 2. Pick a topic not already used before (de-duped against a small history file
+//    kept in the GitHub repo, same pattern as posts-data.js for the blog)
+// 3. Generate a faceless-explainer video script (voice-over only, no on-camera talent)
+//    using OpenRouter, optimized for:
+//      - SEO   -> YouTube/Google search (title, description, tags)
+//      - AEO   -> Answer Engines (ChatGPT/Perplexity) via a clear Q&A block
+//      - GEO   -> Generative Engines via structured, factual, citable phrasing
+// 4. Return JSON only — this endpoint does NOT do TTS, video assembly, or upload.
+//    Those are separate future steps (api/render-video.js, api/upload-youtube.js)
+//    that will consume this endpoint's output.
+//
+// CUSTOM TOPIC (manual override):
+//   /api/generate-video-script?secret=YOUR_SECRET&topic=iPhone%2017%20review
+//
+// REQUIRED ENV VARS (Vercel > Settings > Environment Variables):
+//   CRON_SECRET          - same secret used by generate-blog.js
+//   OPENROUTER_API_KEY   - same key already used by generate-blog.js
+//   YOUTUBE_API_KEY       - free from Google Cloud Console (enable "YouTube Data API v3")
+//   GITHUB_TOKEN / GITHUB_OWNER / GITHUB_REPO - same as generate-blog.js, used to
+//                          store used-topic history at data/video-topics-history.json
+
+export default async function handler(req, res) {
+  function extractJSON(text) {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start === -1 || end === -1) return text;
+    return text.slice(start, end + 1);
   }
 
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  try {
+    const authHeader = req.headers.authorization || "";
+    const headerOk = authHeader === `Bearer ${process.env.CRON_SECRET}`;
+    const queryOk = req.query.secret === process.env.CRON_SECRET;
+    if (!headerOk && !queryOk) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
 
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--body);
-    -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
-  }
+    const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+    const YOUTUBE_KEY = process.env.YOUTUBE_API_KEY;
+    const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+    const GITHUB_OWNER = process.env.GITHUB_OWNER;
+    const GITHUB_REPO = process.env.GITHUB_REPO;
 
-  .glow {
-    position: fixed;
-    top: -20%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 900px;
-    height: 900px;
-    background: radial-gradient(circle, rgba(91,127,255,0.16) 0%, rgba(160,84,245,0.10) 40%, transparent 70%);
-    pointer-events: none;
-    z-index: 0;
-  }
+    if (!OPENROUTER_KEY) return res.status(500).json({ error: "Missing OPENROUTER_API_KEY" });
 
-  .wrap {
-    max-width: 1080px;
-    margin: 0 auto;
-    padding: 0 24px;
-    position: relative;
-    z-index: 1;
-  }
+    const customTopic = (req.query.topic || req.body?.topic || "").trim();
+    const regionCode = (req.query.region || "US").trim();
 
-  /* ---------- nav ---------- */
-  nav {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 28px 0;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-family: var(--display);
-    font-weight: 700;
-    font-size: 1.15rem;
-    letter-spacing: -0.01em;
-  }
-  .brand img { width: 34px; height: 34px; }
-  .brand span.hl {
-    background: linear-gradient(120deg, var(--blue), var(--violet));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .yt-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 18px;
-    border-radius: 999px;
-    background: linear-gradient(120deg, var(--blue), var(--violet));
-    color: #fff;
-    text-decoration: none;
-    font-weight: 600;
-    font-size: 0.9rem;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-    box-shadow: 0 6px 20px rgba(91,127,255,0.25);
-  }
-  .yt-btn:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(91,127,255,0.4); }
+    // ---------------------------------------------------------------------
+    // STEP 1: get a topic — either the custom one, or pull YouTube trending
+    // ---------------------------------------------------------------------
+    let candidateTopics = [];
 
-  /* ---------- hero ---------- */
-  .hero { padding: 90px 0 70px; text-align: center; }
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--cyan);
-    margin-bottom: 22px;
-    display: inline-block;
-  }
-  h1 {
-    font-family: var(--display);
-    font-size: clamp(2.4rem, 5.5vw, 4.2rem);
-    font-weight: 700;
-    line-height: 1.05;
-    letter-spacing: -0.02em;
-    margin: 0 0 22px;
-  }
-  h1 .gradient {
-    background: linear-gradient(120deg, var(--blue), var(--violet) 60%, var(--cyan));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .sub {
-    font-size: 1.15rem;
-    color: var(--text-soft);
-    max-width: 560px;
-    margin: 0 auto 36px;
-    line-height: 1.6;
-  }
+    if (customTopic) {
+      candidateTopics = [{ title: customTopic, description: "" }];
+    } else {
+      if (!YOUTUBE_KEY) {
+        return res.status(500).json({ error: "Missing YOUTUBE_API_KEY (needed for trending fetch — or pass ?topic= to skip it)" });
+      }
+      // videoCategoryId=28 = "Science & Technology" on YouTube. Without this filter,
+      // chart=mostPopular returns the SITE-WIDE trending chart (music, sports,
+      // entertainment, diss tracks, etc.) — completely unrelated to an AI/Tech channel.
+      // Allow override via ?category=<id> if you ever want a different niche.
+      const categoryId = (req.query.category_id || "28").trim();
+      const trendingUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&chart=mostPopular&regionCode=${regionCode}&videoCategoryId=${categoryId}&maxResults=25&key=${YOUTUBE_KEY}`;
+      const trendingRes = await fetch(trendingUrl);
+      const trendingData = await trendingRes.json();
+      if (trendingData.error) {
+        return res.status(500).json({ error: "YouTube API error", detail: trendingData.error });
+      }
+      candidateTopics = (trendingData.items || []).map((v) => ({
+        title: v.snippet?.title || "",
+        description: (v.snippet?.description || "").slice(0, 200),
+        category: v.snippet?.categoryId,
+        views: v.statistics?.viewCount,
+      }));
 
-  /* ---------- pipeline (signature element) ---------- */
-  .pipeline {
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-    gap: 0;
-    margin: 60px 0;
-    flex-wrap: wrap;
-  }
-  .pnode {
-    background: var(--bg-soft);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 20px 18px;
-    width: 168px;
-    text-align: left;
-    position: relative;
-  }
-  .pnode .num {
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    color: var(--cyan);
-    margin-bottom: 10px;
-    display: block;
-  }
-  .pnode .label {
-    font-family: var(--display);
-    font-weight: 600;
-    font-size: 0.98rem;
-    margin-bottom: 6px;
-  }
-  .pnode .desc {
-    font-size: 0.8rem;
-    color: var(--text-soft);
-    line-height: 1.45;
-  }
-  .arrow {
-    align-self: center;
-    color: var(--text-soft);
-    font-family: var(--mono);
-    font-size: 1.1rem;
-    padding: 0 6px;
-    opacity: 0.6;
-  }
+      // Safety net: YouTube's mostPopular + videoCategoryId filter can occasionally
+      // still include off-topic items (movie trailers, music, etc. that got
+      // mis-tagged, or a sparse regional tech chart). Drop anything that doesn't
+      // actually look tech/AI-related before trusting the list.
+      const techPattern = /\b(ai|artificial intelligence|tech|technology|software|app|coding|programming|robot|chip|gadget|smartphone|iphone|android|computer|gpu|processor|startup|saas|cyber|data|cloud|automation)\b/i;
+      candidateTopics = candidateTopics.filter(
+        (t) => techPattern.test(t.title) || techPattern.test(t.description)
+      );
 
-  /* ---------- about ---------- */
-  .section { padding: 50px 0; border-top: 1px solid var(--line); }
-  .section h2 {
-    font-family: var(--display);
-    font-size: 1.7rem;
-    font-weight: 600;
-    margin: 0 0 18px;
+      // The channel is specifically AI-focused ("AI With Asfi"), not general tech —
+      // so prefer AI-specific topics over things like hardware repair guides when
+      // both are available. This is a stable sort, so within each group we keep
+      // YouTube's own trending order (mostPopular is already ranked by trending rank,
+      // so item 0 is more "trending" than item 10 — we don't want to lose that).
+      const aiPattern = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
+      candidateTopics = candidateTopics
+        .map((t, i) => ({ ...t, _rank: i, _isAI: aiPattern.test(t.title) || aiPattern.test(t.description) }))
+        .sort((a, b) => (b._isAI - a._isAI) || (a._rank - b._rank));
+
+      // The Science & Technology "mostPopular" chart is small (often 15-25
+      // videos) and barely changes hour-to-hour, so after repeated runs most
+      // of it ends up in the "used" history — leaving nothing "fresh" and
+      // falling to the curated list far more often than it should. Always
+      // supplement with a keyword search for recent AI/tech news (last 48h),
+      // not just when the trending chart is completely empty, to keep the
+      // candidate pool large enough that real trending topics keep surfacing.
+      const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=relevance&publishedAfter=${new Date(Date.now() - 2 * 86400000).toISOString()}&q=${encodeURIComponent("AI news OR AI tools OR tech news OR new gadget")}&regionCode=${regionCode}&maxResults=25&key=${YOUTUBE_KEY}`;
+      const searchRes = await fetch(searchUrl);
+      const searchData = await searchRes.json();
+      const searchTopics = (searchData.items || [])
+        .map((v) => ({
+          title: v.snippet?.title || "",
+          description: (v.snippet?.description || "").slice(0, 200),
+          category: "28",
+        }))
+        .filter((t) => techPattern.test(t.title) || techPattern.test(t.description));
+
+      // Merge, de-duping by normalized title so the same video isn't counted twice.
+      const seenTitles = new Set(candidateTopics.map((t) => t.title.toLowerCase().trim()));
+      for (const t of searchTopics) {
+        if (!seenTitles.has(t.title.toLowerCase().trim())) {
+          candidateTopics.push(t);
+          seenTitles.add(t.title.toLowerCase().trim());
+        }
+      }
+    }
+
+    if (!candidateTopics.length) {
+      return res.status(500).json({ error: "No candidate topics found" });
+    }
+
+    // ---------------------------------------------------------------------
+    // De-dupe against previously used topics (stored in the repo, same idea
+    // as posts-data.js dedupe for the blog) so we don't make the same video twice.
+    // ---------------------------------------------------------------------
+    let usedTitles = [];
+    let historyFile = null;
+    const historyApi = GITHUB_OWNER && GITHUB_REPO
+      ? `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/data/video-topics-history.json`
+      : null;
+
+    if (historyApi && GITHUB_TOKEN) {
+      const histGet = await fetch(historyApi, { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } });
+      if (histGet.ok) {
+        historyFile = await histGet.json();
+        try {
+          usedTitles = JSON.parse(Buffer.from(historyFile.content, "base64").toString("utf-8"));
+        } catch (e) {
+          usedTitles = [];
+        }
+      }
+    }
+
+    function normalize(s) {
+      return s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+    }
+    const usedSet = new Set(usedTitles.map(normalize));
+
+    // ---------------------------------------------------------------------
+    // Quality gate + TIERED selection.
+    //   Tier 0: YouTube's own search-suggestion (autocomplete) endpoint — this
+    //           reveals REAL phrases people search for (the same kind of signal
+    //           YouTube Studio's "Trends > What people are looking for" panel
+    //           shows), but it's publicly queryable and fully automatable,
+    //           unlike the Studio panel itself. Strongest AIO/SEO signal we have.
+    //   Tier 1: trending + AI-specific title (real trending AI news)
+    //   Tier 2: trending + general tech title (still genuinely trending, just
+    //           not AI-specific — phones, apps, gadgets, software launches)
+    //   Tier 3: curated evergreen AI topics (only if nothing above is usable)
+    // ---------------------------------------------------------------------
+    const aiPattern2 = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
+    const techPattern2 = /\b(ai|tech|technology|software|app|coding|programming|robot|chip|gadget|smartphone|iphone|android|computer|gpu|processor|startup|saas|cyber|data|cloud|automation|update|feature|review|launch)\b/i;
+    const isThin = (t) => (t.description || "").trim().length < 60;
+    const isHashtagSpam = (t) => (t.title.match(/#/g) || []).length >= 2;
+    const isUsable = (t) => !usedSet.has(normalize(t.title)) && !isThin(t) && !isHashtagSpam(t);
+
+    async function fetchSearchSuggestions() {
+      // Rotate through a handful of AI/tech seed terms so we don't always
+      // pull suggestions for the same query. YouTube's suggest endpoint
+      // returns a JS array like: ["seed", ["suggestion 1", "suggestion 2", ...]]
+      const SEEDS = [
+        "how does ai", "what is", "chatgpt", "machine learning", "ai tools",
+        "artificial intelligence", "how to use ai", "best ai", "ai vs", "why does ai",
+      ];
+      const seed = SEEDS[Math.floor(Math.random() * SEEDS.length)];
+      try {
+        const url = `http://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(seed)}`;
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+        const arr = await r.json();
+        const suggestions = Array.isArray(arr) && Array.isArray(arr[1]) ? arr[1] : [];
+        // These are bare search phrases, not full video titles/descriptions —
+        // give them a synthetic description so downstream isThin() etc still work,
+        // and title-case them lightly since raw suggestions are all lowercase.
+        return suggestions
+          .filter((s) => techPattern2.test(s))
+          .map((s) => ({
+            title: s.replace(/\b\w/g, (c) => c.toUpperCase()),
+            description: `A real, currently-searched YouTube query in this niche: "${s}". Build a genuinely useful explainer that directly answers what someone searching this phrase wants to know.`,
+          }));
+      } catch (e) {
+        console.log("Search-suggestion fetch failed (non-fatal):", e.message);
+        return [];
+      }
+    }
+
+    const suggestionTopics = await fetchSearchSuggestions();
+
+    let fresh =
+      suggestionTopics.find((t) => isUsable(t)) ||
+      candidateTopics.find((t) => isUsable(t) && aiPattern2.test(t.title)) ||
+      candidateTopics.find((t) => isUsable(t) && techPattern2.test(t.title));
+
+    const CURATED_AI_TOPICS = [
+      { title: "How Large Language Models Actually Work", description: "An evergreen explainer on the mechanics behind models like ChatGPT and Claude — tokens, training, and inference, explained simply." },
+      { title: "5 AI Tools That Save You Hours Every Week", description: "A practical roundup of free/low-cost AI tools for productivity, writing, and research." },
+      { title: "ChatGPT vs Claude vs Gemini: Which AI Should You Actually Use", description: "A practical comparison of the major AI assistants — strengths, weaknesses, and which one fits which task." },
+      { title: "What Is a Neural Network, Really?", description: "A simple, visual explanation of how neural networks learn, for a non-technical audience." },
+      { title: "How AI Image Generators Turn Text Into Pictures", description: "An explainer on diffusion models and how tools like Midjourney and DALL-E work under the hood." },
+      { title: "The Biggest AI Myths People Still Believe", description: "Debunking common misconceptions about how AI models think, learn, and what they can and can't do." },
+      { title: "How to Write Better AI Prompts (Beginner Guide)", description: "A practical, example-driven guide to getting better results from ChatGPT, Claude, and other AI tools." },
+      { title: "AI Agents Explained: What They Are and Why Everyone's Talking About Them", description: "A clear breakdown of what an 'AI agent' actually means and how it differs from a regular chatbot." },
+      { title: "How Does Face Recognition Actually Work?", description: "An explainer on the computer vision techniques behind face ID and photo tagging." },
+      { title: "Why Every Big Tech Company Is Racing to Build AI Chips", description: "A look at why GPUs and custom AI chips became the most valuable hardware in tech." },
+      { title: "What Is Edge AI and Why Does It Matter?", description: "An explainer on running AI models directly on phones and devices instead of the cloud." },
+      { title: "How AI Voice Cloning Actually Works", description: "A breakdown of the technology behind realistic AI voice generation and its risks." },
+      { title: "The Difference Between Machine Learning and Deep Learning", description: "A simple explainer clarifying two terms people often use interchangeably but mean different things." },
+      { title: "How Self-Driving Cars 'See' the Road", description: "An explainer on the sensors and AI models that let autonomous vehicles navigate." },
+      { title: "What Is a GPU and Why Does AI Need So Many?", description: "A beginner-friendly explainer on why graphics chips became essential for AI training." },
+      { title: "How Recommendation Algorithms Actually Decide What You See", description: "An explainer on how platforms like YouTube and Netflix use AI to personalize your feed." },
+      { title: "Are AI Detectors Actually Accurate?", description: "A factual look at how AI-content detection tools work and their real-world reliability." },
+      { title: "How Much Energy Does Training an AI Model Actually Use?", description: "A factual breakdown of the real computing and energy cost behind large AI models." },
+      { title: "What Is Prompt Injection and Why Should You Care?", description: "An explainer on a real security risk in AI systems, in plain language." },
+      { title: "How AI Is Changing Software Development", description: "A look at how AI coding assistants are changing what it means to be a programmer." },
+    ];
+
+    if (!fresh) {
+      const freshCurated = CURATED_AI_TOPICS.find((t) => !usedSet.has(normalize(t.title)));
+      fresh = freshCurated || CURATED_AI_TOPICS[0]; // last resort: reuse is better than failing the whole run
+    }
+
+    const chosenTopic = fresh;
+
+    // ---------------------------------------------------------------------
+    // STEP 2: generate the faceless-explainer script + SEO/AEO/GEO metadata
+    // ---------------------------------------------------------------------
+    const prompt = `You are writing a FACELESS EXPLAINER YouTube video script (voice-over only, no
+on-camera host, paired with stock footage/B-roll and text-on-screen). The video is about:
+
+TOPIC: ${chosenTopic.title}
+CONTEXT: ${chosenTopic.description || "No extra context — research from your own knowledge and produce an accurate, well-structured explainer."}
+
+Return ONLY valid JSON, no markdown fences, no commentary, matching EXACTLY this shape:
+{
+  "video_title": "...",
+  "hook_line": "...",
+  "script": [
+    {"scene": 1, "voiceover": "...", "visual_note": "...", "on_screen_text": "..."},
+    {"scene": 2, "voiceover": "...", "visual_note": "...", "on_screen_text": "..."}
+  ],
+  "cta_line": "...",
+  "description": "...",
+  "tags": ["...", "..."],
+  "chapters": [{"time": "0:00", "label": "..."}, {"time": "0:20", "label": "..."}],
+  "aeo_qa_block": [{"q": "...", "a": "..."}, {"q": "...", "a": "..."}, {"q": "...", "a": "..."}],
+  "thumbnail_text_ideas": ["...", "...", "..."]
+}
+
+STRICT RULES:
+- LANGUAGE LEVEL: write in SIMPLE, CLEAR English — short sentences, common everyday words,
+  no complex vocabulary or idioms. Target reading/listening level: someone who learned English
+  as a second language should follow it easily on first listen, same as a native speaker would.
+  This does NOT mean dumbing down the information — the facts and depth stay full quality, only
+  the sentence complexity and word choice get simpler. Avoid words like "utilize", "leverage",
+  "paradigm", "myriad" — use "use", "many", "way" instead.
+- QUALITY FLOOR (non-negotiable): every fact must be accurate and traceable to the given topic/
+  context. No filler sentences. No two scenes repeating the same point in different words. If a
+  scene doesn't add new information, cut it rather than padding runtime.
+- "script": 5-6 scenes by default (never fewer than 5). Only go up to 7-8 scenes
+  if the topic genuinely needs that many distinct visual beats (each scene will
+  use either a video clip OR a still image as its visual, so more scenes means
+  more variety, not padding) — 5-6 is the target, 7-8 is the exception, not the norm.
+  ~500-750 words of voiceover TOTAL across however many scenes (roughly 3.5-5
+  minutes spoken).
+  Each scene's voiceover is 3-6 sentences, written for natural TEXT-TO-SPEECH delivery: no
+  stage directions inside the voiceover text itself, no emoji, plain spoken sentences.
+- "visual_note": a short concrete instruction for what stock footage/B-roll to show
+  (e.g. "wide shot of a stock exchange floor, fast cuts of tickers"), not vague ("something related").
+- "on_screen_text": short punchy on-screen caption/keyword for that scene (3-6 words), or "" if none needed.
+- "video_title": under 70 characters (YouTube truncates longer titles in search/suggested results).
+  Put the PRIMARY keyword as close to the FRONT of the title as possible (YouTube's search and
+  "AIO" — its AI-driven recommendation system that decides what to surface for a query — both
+  weight early keyword placement heavily). No clickbait ALL CAPS spam, no misleading claims —
+  YouTube actively suppresses reach on titles that don't match the actual video content.
+- "description": 200-350 words (longer, keyword-rich descriptions rank better on YouTube than short
+  ones). Structure it for FOUR things at once:
+    (1) SEO — the first 2-3 sentences (the part visible before "Show more") must naturally include
+        the primary keyword AND 1-2 close variants, since this snippet is what YouTube search and
+        Google search both index most heavily.
+    (2) AIO (YouTube's own AI ranking/recommendation system) — write naturally but keyword-dense
+        throughout, not just the opening; YouTube's system matches full description content against
+        both the video's actual spoken transcript and search queries, so keyword variety beyond the
+        title genuinely helps discovery.
+    (3) AEO — include a clearly-labeled "Key facts:" bullet list of 3-5 concrete, citable facts,
+        written so an answer engine (ChatGPT, Perplexity, Google AI Overview) could quote them directly.
+    (4) GEO — write in a factual, structured, third-person tone (not hype/marketing language) so
+        generative engines treat this as a reliable source to cite.
+  End the description with: the chapters list inline as plain text lines ("0:00 Intro" etc), then
+  3-5 relevant hashtags on their own line (e.g. "#AI #MachineLearning #TechExplained") — YouTube
+  surfaces the first 3 hashtags above the title itself, which is free extra discoverability.
+- "tags": 12-15 tags (use the full allowance — more relevant tags genuinely help YouTube's
+  matching system), ordered from most to least important: 2-3 broad single/two-word tags first
+  (the biggest search volume), then long-tail 3-5 word tags, then close variants/misspellings
+  people actually search. No hashtags here (tags field is separate from description hashtags),
+  no duplicates, no irrelevant tags just for reach — mismatched tags hurt watch-time signals.
+- "hook_line": the FIRST 3 seconds of spoken script — this is the single highest-leverage line
+  for YouTube's algorithm, since audience-retention in the first few seconds is a major ranking
+  signal. Must create curiosity/stakes immediately, no throat-clearing ("Hey guys, welcome back").
+- "cta_line": natural subscribe/engagement prompt, not generic ("like and subscribe" alone is banned —
+  tie it to the topic, e.g. "Subscribe if you want the next update on this before it breaks anywhere else").
+- "chapters": timestamps must be strictly increasing starting at 0:00, one per major script beat,
+  spacing estimated from voiceover length (roughly 150 spoken words per minute).
+- "aeo_qa_block": exactly 3-5 question/answer pairs a viewer might ask an AI assistant about this
+  topic — answers must be self-contained (understandable without watching the video), 1-3 sentences each.
+- "thumbnail_text_ideas": 3 short (2-5 word) punchy thumbnail text options, no clickbait lies.
+- Everything must be factually grounded in the given topic/context — no fabricated statistics,
+  no invented quotes, no invented sources. If context is thin, stay general rather than inventing specifics.
+- No AI-filler phrasing anywhere ("in today's fast-paced world", "let's dive in", etc).`;
+
+    async function tryGenerate(model) {
+      const aiRes = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+        }),
+      });
+      console.log(`OpenRouter [${model}] status:`, aiRes.status);
+      const aiData = await aiRes.json();
+      let rawText = aiData.choices?.[0]?.message?.content || "";
+      rawText = extractJSON(rawText.replace(/```json|```/g, "").trim());
+      try {
+        return JSON.parse(rawText);
+      } catch (e) {
+        console.log(`OpenRouter [${model}] gave unparseable output:`, rawText.slice(0, 300));
+        return null;
+      }
+    }
+
+    // Same fast-then-fallback model order style as generate-blog.js.
+    const MODELS = [
+      "anthropic/claude-3.5-sonnet",
+      "openai/gpt-4o-mini",
+      "meta-llama/llama-3.1-70b-instruct:free",
+    ];
+
+    let script = null;
+    for (const model of MODELS) {
+      script = await tryGenerate(model);
+      if (script && script.script && script.script.length) break;
+    }
+
+    if (!script) {
+      return res.status(500).json({ error: "All models failed to generate a usable script" });
+    }
+
+    // ---------------------------------------------------------------------
+    // Record this topic as used, so future runs don't repeat it. Previously
+    // this write was never checked for success — if it silently failed
+    // (stale sha, e.g. from overlapping runs triggered close together), the
+    // topic never actually got recorded as used, so the same curated topic
+    // kept getting picked run after run. Now: check success, retry once with
+    // a freshly-fetched sha if it failed, matching the blog's posts-data.js fix.
+    // ---------------------------------------------------------------------
+    async function putHistory(list, shaToUse) {
+      return fetch(historyApi, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${GITHUB_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: `Record used video topic: ${chosenTopic.title}`,
+          content: Buffer.from(JSON.stringify(list, null, 2)).toString("base64"),
+          sha: shaToUse,
+        }),
+      });
+    }
+
+    if (historyApi && GITHUB_TOKEN) {
+      const updated = [chosenTopic.title, ...usedTitles].slice(0, 500); // cap history size
+      let putRes = await putHistory(updated, historyFile ? historyFile.sha : undefined);
+
+      if (!putRes.ok) {
+        // Likely a stale/missing sha — re-fetch current content and retry once.
+        const retryGet = await fetch(historyApi, { headers: { Authorization: `Bearer ${GITHUB_TOKEN}` } });
+        if (retryGet.ok) {
+          const retryFile = await retryGet.json();
+          let freshList = [];
+          try {
+            freshList = JSON.parse(Buffer.from(retryFile.content, "base64").toString("utf-8"));
+          } catch (e) {
+            freshList = [];
+          }
+          const mergedUpdate = [chosenTopic.title, ...freshList].slice(0, 500);
+          putRes = await putHistory(mergedUpdate, retryFile.sha);
+        }
+      }
+
+      if (!putRes.ok) {
+        console.error("Failed to record topic history after retry:", await putRes.text());
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      source_topic: chosenTopic,
+      ...script,
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: err.message });
   }
-  .section p {
-    color: var(--text-soft);
-    line-height: 1.75;
-    font-size: 1.02rem;
-    max-width: 700px;
-  }
-  .grid2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 22px;
-    margin-top: 28px;
-  }
-  .card {
-    background: var(--bg-soft);
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 22px;
-  }
-  .card .tag {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--violet);
-    display: block;
-    margin-bottom: 10px;
-  }
-  .card h3 { font-family: var(--display); font-size: 1.05rem; margin: 0 0 8px; }
-  .card p { font-size: 0.92rem; margin: 0; }
-
-  /* ---------- footer ---------- */
-  footer {
-    padding: 40px 0 60px;
-    text-align: center;
-    color: var(--text-soft);
-    font-size: 0.85rem;
-    border-top: 1px solid var(--line);
-  }
-  footer a { color: var(--cyan); text-decoration: none; }
-
-  @media (max-width: 640px) {
-    .grid2 { grid-template-columns: 1fr; }
-    .pipeline { flex-direction: column; align-items: center; }
-    .arrow { transform: rotate(90deg); padding: 4px 0; }
-  }
-</style>
-</head>
-<body>
-<div class="glow"></div>
-
-<div class="wrap">
-  <nav>
-    <div class="brand">
-      <img src="/favicon.svg" alt="" />
-      <span>AI With <span class="hl">Asfi</span></span>
-    </div>
-    <a class="yt-btn" href="https://www.youtube.com/@AIWithAsfi" target="_blank" rel="noopener">
-      ▶ Watch on YouTube
-    </a>
-  </nav>
-
-  <section class="hero">
-    <span class="eyebrow">// automated content pipeline</span>
-    <h1>Real trends in.<br/><span class="gradient">AI &amp; tech videos out.</span></h1>
-    <p class="sub">
-      This is the engine behind the <strong>AI With Asfi</strong> YouTube channel —
-      a pipeline that watches what's actually trending, then writes, voices,
-      builds, and publishes explainer videos on its own.
-    </p>
-
-    <div class="pipeline">
-      <div class="pnode">
-        <span class="num">01</span>
-        <div class="label">Trending pull</div>
-        <div class="desc">Reads real YouTube trending data for AI &amp; tech topics, filtered for relevance.</div>
-      </div>
-      <span class="arrow">→</span>
-      <div class="pnode">
-        <span class="num">02</span>
-        <div class="label">Script + SEO</div>
-        <div class="desc">Writes a script and metadata built for search, and for AI answer engines.</div>
-      </div>
-      <span class="arrow">→</span>
-      <div class="pnode">
-        <span class="num">03</span>
-        <div class="label">Voice + visuals</div>
-        <div class="desc">Generates narration and pairs it with matching footage, scene by scene.</div>
-      </div>
-      <span class="arrow">→</span>
-      <div class="pnode">
-        <span class="num">04</span>
-        <div class="label">Publish</div>
-        <div class="desc">Uploads the finished video straight to the channel, titled and tagged.</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="section">
-    <h2>What this actually is</h2>
-    <p>
-      <strong>AI With Asfi</strong> is a YouTube channel covering AI tools, tech news, and
-      how things work — explained simply. Every video on the channel is produced by
-      the automated pipeline shown above: no stock scripts, no filler, just real
-      trending topics turned into short, clear explainers on a regular schedule.
-    </p>
-    <div class="grid2">
-      <div class="card">
-        <span class="tag">Source</span>
-        <h3>Real trending data</h3>
-        <p>Topics come from actual YouTube trending activity in the Science &amp; Technology category, not a fixed script.</p>
-      </div>
-      <div class="card">
-        <span class="tag">Cadence</span>
-        <h3>Twice a day, every day</h3>
-        <p>New videos publish on a fixed schedule, timed around when the audience is most active.</p>
-      </div>
-    </div>
-  </section>
-
-  <footer>
-    Built and run by the AI With Asfi project · <a href="https://www.youtube.com/@AIWithAsfi" target="_blank" rel="noopener">youtube.com/@AIWithAsfi</a>
-  </footer>
-</div>
-
-</body>
-</html>
+}
