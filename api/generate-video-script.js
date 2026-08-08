@@ -161,16 +161,16 @@ export default async function handler(req, res) {
     const usedSet = new Set(usedTitles.map(normalize));
 
     // ---------------------------------------------------------------------
-    // Quality gate + TIERED selection. Previously this only accepted trending
-    // items with "AI" literally in the title, which was too strict — real
-    // trending Sci&Tech topics (new phones, apps, gadgets) rarely say "AI" in
-    // the title even when relevant to a tech channel, so almost everything
-    // fell through to the small curated list, causing repetitive LLM-heavy
-    // topics. Now we try three tiers, in order, before giving up to curated:
-    //   Tier 1: trending + AI-specific title (best — real trending AI news)
+    // Quality gate + TIERED selection.
+    //   Tier 0: YouTube's own search-suggestion (autocomplete) endpoint — this
+    //           reveals REAL phrases people search for (the same kind of signal
+    //           YouTube Studio's "Trends > What people are looking for" panel
+    //           shows), but it's publicly queryable and fully automatable,
+    //           unlike the Studio panel itself. Strongest AIO/SEO signal we have.
+    //   Tier 1: trending + AI-specific title (real trending AI news)
     //   Tier 2: trending + general tech title (still genuinely trending, just
     //           not AI-specific — phones, apps, gadgets, software launches)
-    //   Tier 3: curated evergreen AI topics (only if trending has nothing usable)
+    //   Tier 3: curated evergreen AI topics (only if nothing above is usable)
     // ---------------------------------------------------------------------
     const aiPattern2 = /\b(ai|artificial intelligence|chatgpt|gpt|llm|machine learning|openai|anthropic|claude|gemini|copilot|neural|generative ai)\b/i;
     const techPattern2 = /\b(ai|tech|technology|software|app|coding|programming|robot|chip|gadget|smartphone|iphone|android|computer|gpu|processor|startup|saas|cyber|data|cloud|automation|update|feature|review|launch)\b/i;
@@ -178,7 +178,39 @@ export default async function handler(req, res) {
     const isHashtagSpam = (t) => (t.title.match(/#/g) || []).length >= 2;
     const isUsable = (t) => !usedSet.has(normalize(t.title)) && !isThin(t) && !isHashtagSpam(t);
 
+    async function fetchSearchSuggestions() {
+      // Rotate through a handful of AI/tech seed terms so we don't always
+      // pull suggestions for the same query. YouTube's suggest endpoint
+      // returns a JS array like: ["seed", ["suggestion 1", "suggestion 2", ...]]
+      const SEEDS = [
+        "how does ai", "what is", "chatgpt", "machine learning", "ai tools",
+        "artificial intelligence", "how to use ai", "best ai", "ai vs", "why does ai",
+      ];
+      const seed = SEEDS[Math.floor(Math.random() * SEEDS.length)];
+      try {
+        const url = `http://suggestqueries.google.com/complete/search?client=firefox&ds=yt&q=${encodeURIComponent(seed)}`;
+        const r = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
+        const arr = await r.json();
+        const suggestions = Array.isArray(arr) && Array.isArray(arr[1]) ? arr[1] : [];
+        // These are bare search phrases, not full video titles/descriptions —
+        // give them a synthetic description so downstream isThin() etc still work,
+        // and title-case them lightly since raw suggestions are all lowercase.
+        return suggestions
+          .filter((s) => techPattern2.test(s))
+          .map((s) => ({
+            title: s.replace(/\b\w/g, (c) => c.toUpperCase()),
+            description: `A real, currently-searched YouTube query in this niche: "${s}". Build a genuinely useful explainer that directly answers what someone searching this phrase wants to know.`,
+          }));
+      } catch (e) {
+        console.log("Search-suggestion fetch failed (non-fatal):", e.message);
+        return [];
+      }
+    }
+
+    const suggestionTopics = await fetchSearchSuggestions();
+
     let fresh =
+      suggestionTopics.find((t) => isUsable(t)) ||
       candidateTopics.find((t) => isUsable(t) && aiPattern2.test(t.title)) ||
       candidateTopics.find((t) => isUsable(t) && techPattern2.test(t.title));
 
